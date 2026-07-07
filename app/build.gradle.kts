@@ -16,19 +16,8 @@ android {
         versionName = "1.0.0"
 
         ndk {
-            abiFilters += listOf("arm64-v8a")
-        }
-    }
-
-    // 将 python 块移到 android 块内、defaultConfig 外（Chaquopy 要求）
-    python {
-        version = "3.11"
-        pip {
-            install("opencv-python")
-            install("numpy")
-            install("scipy")
-            install("scikit-learn")
-            install("Pillow")
+            // Chaquopy supports arm64-v8a and x86_64
+            abiFilters += listOf("arm64-v8a", "x86_64")
         }
     }
 
@@ -66,6 +55,20 @@ android {
                 "LICENSE.txt",
                 "LICENSE"
             )
+        }
+    }
+}
+
+// Chaquopy 17+ DSL uses "chaquopy" block (not "python" block, not inside android)
+chaquopy {
+    defaultConfig {
+        version = "3.11"
+        pip {
+            install("opencv-python")
+            install("numpy")
+            install("scipy")
+            install("scikit-learn")
+            install("Pillow")
         }
     }
 }
