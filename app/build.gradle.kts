@@ -18,18 +18,17 @@ android {
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
+    }
 
-        // Python配置
-        python {
-            version = "3.11"
-
-            pip {
-                install("opencv-python")
-                install("numpy")
-                install("scipy")
-                install("scikit-learn")
-                install("Pillow")
-            }
+    // 将 python 块移到 android 块内、defaultConfig 外（Chaquopy 要求）
+    python {
+        version = "3.11"
+        pip {
+            install("opencv-python")
+            install("numpy")
+            install("scipy")
+            install("scikit-learn")
+            install("Pillow")
         }
     }
 
