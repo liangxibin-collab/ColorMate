@@ -16,8 +16,9 @@ android {
         versionName = "1.0.0"
 
         ndk {
-            // Chaquopy supports arm64-v8a and x86_64
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            // Only target arm64-v8a for now; x86_64 causes mergeDebugNativeLibs
+            // failures with Chaquopy native library transforms on CI runners.
+            abiFilters += listOf("arm64-v8a")
         }
     }
 
@@ -64,10 +65,11 @@ chaquopy {
     defaultConfig {
         version = "3.11"
         pip {
+            // Minimal deps: opencv handles color analysis, numpy for arrays,
+            // Pillow for image I/O. scipy and scikit-learn removed to reduce
+            // build time and CI memory pressure.
             install("opencv-python")
             install("numpy")
-            install("scipy")
-            install("scikit-learn")
             install("Pillow")
         }
     }
