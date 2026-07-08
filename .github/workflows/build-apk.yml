@@ -13,10 +13,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 17 (with tools.jar compat for Chaquopy)
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: 'zulu'    # Zulu JDK 17 still ships tools.jar
           java-version: '17'
 
       - name: Setup Gradle
