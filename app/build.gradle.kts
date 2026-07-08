@@ -1,6 +1,5 @@
 plugins {
     id("com.android.application")
-    id("com.chaquo.python")
     id("org.jetbrains.kotlin.android")
 }
 
@@ -16,8 +15,6 @@ android {
         versionName = "1.0.0"
 
         ndk {
-            // Only target arm64-v8a for now; x86_64 causes mergeDebugNativeLibs
-            // failures with Chaquopy native library transforms on CI runners.
             abiFilters += listOf("arm64-v8a")
         }
     }
@@ -60,21 +57,6 @@ android {
     }
 }
 
-// Chaquopy 17+ DSL uses "chaquopy" block (not "python" block, not inside android)
-chaquopy {
-    defaultConfig {
-        version = "3.11"
-        pip {
-            // Minimal deps: opencv handles color analysis, numpy for arrays,
-            // Pillow for image I/O. scipy and scikit-learn removed to reduce
-            // build time and CI memory pressure.
-            install("opencv-python")
-            install("numpy")
-            install("Pillow")
-        }
-    }
-}
-
 dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
@@ -82,4 +64,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("com.google.android.material:material:1.12.0")
+
+    // OpenCV for Android — provides the full Java API (Imgproc, Core, etc.)
+    implementation("com.quickbirdstudios:opencv:4.9.0")
 }

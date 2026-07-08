@@ -1,12 +1,9 @@
 # ColorMate ProGuard Rules
 
-# Keep Python modules
--keep class com.chaquo.python.** { *; }
+# Keep OpenCV
+-keep class org.opencv.** { *; }
 
-# Keep model serialization
--keep class colormate.** { *; }
-
-# Keep Android components
+# Keep app classes
 -keep class com.colormate.app.** { *; }
 
 # Keep serialization

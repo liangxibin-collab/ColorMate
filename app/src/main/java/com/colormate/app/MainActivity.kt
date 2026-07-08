@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -13,15 +14,16 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
-import com.chaquo.python.Python
-import com.chaquo.python.android.AndroidPlatform
+import com.colormate.app.color.ColorMatcher
+import com.colormate.app.color.ColorStyleModel
+import com.colormate.app.color.ColorStyleTrainer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.opencv.android.OpenCVLoader
 import java.io.*
 import java.text.SimpleDateFormat
 import java.util.*
-import kotlin.collections.set
 
 class MainActivity : AppCompatActivity() {
 
@@ -55,20 +57,18 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // 初始化OpenCV
+        if (!OpenCVLoader.initDebug()) {
+            Toast.makeText(this, "OpenCV初始化失败", Toast.LENGTH_LONG).show()
+        }
+
         ui = MainUI(this) { action ->
             handleUIAction(action)
         }
         setContentView(ui.root)
 
-        initPython()
         checkPermissions()
         updateUI()
-    }
-
-    private fun initPython() {
-        if (!Python.isStarted()) {
-            Python.start(AndroidPlatform(this))
-        }
     }
 
     private fun checkPermissions() {
@@ -79,16 +79,13 @@ class MainActivity : AppCompatActivity() {
         ) {
             neededPermissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            // Android 10+ 不需要WRITE权限，但为了兼容
-        }
-        // Android 13+
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES)
-            != PackageManager.PERMISSION_GRANTED && android.os.Build.VERSION.SDK_INT >= 33
-        ) {
-            neededPermissions.add(Manifest.permission.READ_MEDIA_IMAGES)
+
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                neededPermissions.add(Manifest.permission.READ_MEDIA_IMAGES)
+            }
         }
 
         if (neededPermissions.isNotEmpty()) {
@@ -120,7 +117,7 @@ class MainActivity : AppCompatActivity() {
             MainUI.Action.SELECT_TARGET -> selectTargetImage()
             MainUI.Action.START_MATCHING -> startMatching()
             MainUI.Action.SELECT_MODEL -> selectModelFile()
-            MainUI.Action.SET_STRENGTH -> { /* handled by slider */ }
+            MainUI.Action.SET_STRENGTH -> { }
             MainUI.Action.CLEAR_MODEL -> clearModel()
             is MainUI.Action.UPDATE_STRENGTH -> currentStrength = action.value
         }
@@ -135,34 +132,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleTrainingDirSelected(uri: Uri) {
-        // 持久化权限
         contentResolver.takePersistableUriPermission(
             uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
         )
         trainingDirPath = uri.toString()
         ui.modelStatus.text = "已选择训练目录"
-        ui.updateTrainingCount(0) // 稍后更新
+        ui.updateTrainingCount(0)
         updateUI()
 
-        // 在后台获取文件数量
         lifecycleScope.launch(Dispatchers.IO) {
             val count = countImagesInDir(uri)
             withContext(Dispatchers.Main) {
                 ui.updateTrainingCount(count)
-                if (count > 0) {
-                    ui.modelStatus.text = "训练目录：$count 张图片"
-                } else {
-                    ui.modelStatus.text = "目录中没有找到JPG图片"
-                }
+                ui.modelStatus.text = if (count > 0) "训练目录：$count 张图片"
+                else "目录中没有找到JPG图片"
             }
         }
     }
 
     private fun countImagesInDir(uri: Uri): Int {
         val docId = DocumentsContract.getTreeDocumentId(uri)
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
-            uri, docId
-        )
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(uri, docId)
         var count = 0
         try {
             contentResolver.query(childrenUri, null, null, null, null)?.use { cursor ->
@@ -191,41 +181,43 @@ class MainActivity : AppCompatActivity() {
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val py = Python.getInstance()
-                val bridge = py.getModule("colormate.android_bridge")
-
-                // 从SAF Uri获取实际路径（通过文件复制到app内部存储）
-                val modelFile = File(cacheDir, "color_style_model.pkl")
-                val modelPath = modelFile.absolutePath
-
-                // 把训练目录中的图片复制到临时目录（因为Chaquopy文件访问可能有限制）
                 val tempTrainDir = File(cacheDir, "training_images")
                 tempTrainDir.mkdirs()
                 copyTrainingImages(dirPath, tempTrainDir)
 
-                val result = bridge.callAttr("train_model",
-                    tempTrainDir.absolutePath,
-                    modelPath
-                )
+                val imagePaths = tempTrainDir.listFiles()
+                    ?.filter { it.extension.lowercase() in listOf("jpg", "jpeg") }
+                    ?.map { it.absolutePath }
+                    ?.sorted()
+
+                if (imagePaths.isNullOrEmpty()) {
+                    withContext(Dispatchers.Main) {
+                        ui.log("❌ 训练目录中没有找到JPG图片")
+                        ui.setTrainingProgress(false)
+                    }
+                    return@launch
+                }
+
+                ui.log("  加载了 ${imagePaths.size} 张参考照片...")
+
+                // 使用Kotlin版训练器
+                val trainer = ColorStyleTrainer(sampleSize = 500)
+                val model = trainer.train(imagePaths)
+
+                // 保存模型
+                val modelFile = File(cacheDir, "color_style_model.pkl")
+                // 使用简化的对象序列化
+                saveModel(model, modelFile.absolutePath)
 
                 withContext(Dispatchers.Main) {
-                    val success = result.get("success").toBoolean()
-                    val msg = result.get("message").toString()
-                    val numImages = result.get("num_images").toInt()
-
-                    if (success) {
-                        trainedModelPath = modelPath
-                        ui.log("✅ 训练成功！使用了 $numImages 张参考照片")
-                        ui.modelStatus.text = "已训练：$numImages 张照片"
-                        ui.setModelLoaded(true)
-                        // 清理临时文件
-                        tempTrainDir.deleteRecursively()
-                    } else {
-                        ui.log("❌ $msg")
-                    }
-                    ui.setTrainingProgress(false)
-                    updateUI()
+                    trainedModelPath = modelFile.absolutePath
+                    ui.log("✅ 训练成功！使用了 ${imagePaths.size} 张参考照片")
+                    ui.modelStatus.text = "已训练：${imagePaths.size} 张照片"
+                    ui.setModelLoaded(true)
+                    tempTrainDir.deleteRecursively()
                 }
+                ui.setTrainingProgress(false)
+                updateUI()
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     ui.log("❌ 训练异常: ${e.message}")
@@ -235,12 +227,27 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // 简化的模型序列化/反序列化
+    private fun saveModel(model: ColorStyleModel, path: String) {
+        ObjectOutputStream(FileOutputStream(path)).use { oos ->
+            oos.writeObject(model)
+        }
+    }
+
+    private fun loadModel(path: String): ColorStyleModel? {
+        return try {
+            ObjectInputStream(FileInputStream(path)).use { ois ->
+                ois.readObject() as ColorStyleModel
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private fun copyTrainingImages(uri: String, targetDir: File) {
         val treeUri = Uri.parse(uri)
         val docId = DocumentsContract.getTreeDocumentId(treeUri)
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
-            treeUri, docId
-        )
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId)
 
         contentResolver.query(childrenUri, null, null, null, null)?.use { cursor ->
             while (cursor.moveToNext()) {
@@ -262,7 +269,7 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 } catch (e: Exception) {
-                    ui.log("⚠️ 无法复制: $name - ${e.message}")
+                    // skip
                 }
             }
         }
@@ -316,35 +323,26 @@ class MainActivity : AppCompatActivity() {
                 )
                 outputFile.parentFile?.mkdirs()
 
-                val py = Python.getInstance()
-                val bridge = py.getModule("colormate.android_bridge")
+                // 加载模型
+                val model = loadModel(modelPath)
+                    ?: throw Exception("模型文件损坏或格式不正确")
 
-                val result = bridge.callAttr("match_image",
-                    modelPath,
-                    tempInput.absolutePath,
-                    outputFile.absolutePath,
-                    currentStrength.toDouble()
-                )
+                // 使用Kotlin版追色器
+                val matcher = ColorMatcher(strength = currentStrength, preserveNatural = true)
+                matcher.match(model, tempInput.absolutePath, outputFile.absolutePath)
 
                 withContext(Dispatchers.Main) {
-                    val success = result.get("success").toBoolean()
+                    ui.log("✅ 追色完成！已保存到: ${outputFile.absolutePath}")
+                    ui.setResultImage(Uri.fromFile(outputFile))
 
-                    if (success) {
-                        ui.log("✅ 追色完成！已保存到: ${outputFile.absolutePath}")
-                        ui.setResultImage(Uri.fromFile(outputFile))
+                    // 刷新图库
+                    val mediaScanIntent = Intent(
+                        Intent.ACTION_MEDIA_SCANNER_SCAN_FILE
+                    )
+                    mediaScanIntent.data = Uri.fromFile(outputFile)
+                    sendBroadcast(mediaScanIntent)
 
-                        // 显示到图库
-                        val mediaScanIntent = Intent(
-                            Intent.ACTION_MEDIA_SCANNER_SCAN_FILE
-                        )
-                        mediaScanIntent.data = Uri.fromFile(outputFile)
-                        sendBroadcast(mediaScanIntent)
-
-                        // 提供分享
-                        Toast.makeText(this@MainActivity, "追色完成！", Toast.LENGTH_SHORT).show()
-                    } else {
-                        ui.log("❌ 追色失败: ${result.get("message")}")
-                    }
+                    Toast.makeText(this@MainActivity, "追色完成！", Toast.LENGTH_SHORT).show()
                     ui.setMatchingProgress(false)
                     tempInput.delete()
                 }
@@ -368,26 +366,23 @@ class MainActivity : AppCompatActivity() {
     private fun loadModelFromUri(uri: Uri) {
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val modelFile = File(cacheDir, "loaded_model.pkl")
+                val modelFile = File(cacheDir, "loaded_model.dat")
                 contentResolver.openInputStream(uri)?.use { input ->
                     modelFile.outputStream().use { output ->
                         input.copyTo(output)
                     }
                 }
 
-                val py = Python.getInstance()
-                val bridge = py.getModule("colormate.android_bridge")
-                val info = bridge.callAttr("get_model_info", modelFile.absolutePath)
+                val model = loadModel(modelFile.absolutePath)
 
                 withContext(Dispatchers.Main) {
-                    if (info.get("success").toBoolean()) {
+                    if (model != null) {
                         trainedModelPath = modelFile.absolutePath
-                        val numImages = info.get("num_training_images").toInt()
-                        ui.log("✅ 模型加载成功！基于 $numImages 张照片训练")
-                        ui.modelStatus.text = "已加载模型：$numImages 张照片"
+                        ui.log("✅ 模型加载成功！基于 ${model.numTrainingImages} 张照片训练")
+                        ui.modelStatus.text = "已加载模型：${model.numTrainingImages} 张照片"
                         ui.setModelLoaded(true)
                     } else {
-                        ui.log("❌ 模型加载失败: ${info.get("message")}")
+                        ui.log("❌ 模型加载失败: 文件格式不兼容")
                     }
                     updateUI()
                 }
