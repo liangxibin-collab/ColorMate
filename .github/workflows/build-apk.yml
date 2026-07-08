@@ -21,17 +21,25 @@ jobs:
 
       - name: Fix tools.jar (Temurin JDK 17 removed it; AarTransform needs it)
         run: |
-          # Download and extract tools.jar from Zulu JDK 17 which still ships it
-          ZULU_URL="https://cdn.azul.com/zulu/bin/zulu17.56.15-ca-jdk17.0.14-linux_x64.zip"
           TOOLS_DIR="$JAVA_HOME/lib"
           if [ ! -f "$TOOLS_DIR/tools.jar" ]; then
             echo "tools.jar not found — downloading from Zulu JDK 17..."
+            ZULU_URL="https://cdn.azul.com/zulu/bin/zulu17.56.15-ca-jdk17.0.14-linux_x64.zip"
             curl -sL "$ZULU_URL" -o /tmp/zulu17.zip
             unzip -q -o /tmp/zulu17.zip -d /tmp/zulu17
-            cp /tmp/zulu17/*/lib/tools.jar "$TOOLS_DIR/"
+            find /tmp/zulu17 -name "lib" -type d | while read d; do
+              if [ -f "$d/tools.jar" ]; then
+                cp "$d/tools.jar" "$TOOLS_DIR/"
+                echo "✅ tools.jar installed at $TOOLS_DIR/tools.jar"
+                ls -la "$TOOLS_DIR/tools.jar"
+                break
+              fi
+            done
             rm -rf /tmp/zulu17 /tmp/zulu17.zip
-            echo "✅ tools.jar installed at $TOOLS_DIR/tools.jar"
-            ls -la "$TOOLS_DIR/tools.jar"
+            if [ ! -f "$TOOLS_DIR/tools.jar" ]; then
+              echo "❌ Could not find tools.jar in Zulu download"
+              exit 1
+            fi
           else
             echo "tools.jar already exists"
           fi
